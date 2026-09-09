@@ -4,6 +4,8 @@ No password handling, private API calls, stealth patches or challenge solving.
 All Playwright objects live on the application event loop.
 """
 import asyncio
+import json
+import tempfile
 import hashlib
 import os
 from pathlib import Path
@@ -89,8 +91,8 @@ def blocker(snapshot):
     return None
 
 
-# Only visible DOM is read. Script state, cookies and internal responses never
-# enter extracted content. Contacts, messages, and recommendations are excluded.
+# Visible DOM is the evidence source. State inspection returns only schema/counts;
+# cookies and internal responses never enter extracted content. Contacts, messages, and recommendations are excluded.
 SNAPSHOT_JS = r"""({platform, mode}) => {
  const visible = e => !!e && e.getBoundingClientRect().width > 0 && e.getBoundingClientRect().height > 0 && getComputedStyle(e).visibility !== 'hidden';
  const text = e => (e?.innerText || '').trim();
@@ -99,10 +101,19 @@ SNAPSHOT_JS = r"""({platform, mode}) => {
  const result={url:location.href,title:document.title,body:text(document.body).slice(0,4000),
    challenge:!!first(['.captcha-container','[class*="captcha-box"]','iframe[src*="captcha"]','iframe[src*="challenge"]']),
    login:!!first(['.login-container','.login-modal','input[type="password"]']),items:[],content:'',comments:[]};
+ if(platform==='xiaohongshu') {
+  const unwrap=v=>v?._value??v?.value??v;
+  const state=window.__INITIAL_STATE__||{};
+  const shape=v=>{const list=unwrap(v);return {count:Array.isArray(list)?list.length:0,fields:Array.isArray(list)&&list.length?Object.keys(list[0]||{}).slice(0,20):[]};};
+  result.inspection={path:location.pathname,visible_cards:all('.note-item').length,
+    feed:shape(state.feed?.feeds),search:shape(state.search?.feeds),
+    search_fields:Object.keys(state.search||{}).slice(0,25)};
+ }
  if(mode==='search') {
   const rows=all(platform==='xiaohongshu'?'.note-item':'.reusable-search__result-container, .entity-result, [data-view-name="search-entity-result-universal-template"]');
   for(const row of rows){
-   const link=[...row.querySelectorAll('a[href]')].find(a=>platform==='xiaohongshu'?/\/(explore|search_result)\/[a-zA-Z0-9]+/.test(a.pathname):/^\/in\/[^/]+\/?$/.test(a.pathname));
+   const links=[...row.querySelectorAll('a[href]')].filter(a=>platform==='xiaohongshu'?/\/(explore|search_result)\/[a-zA-Z0-9]+/.test(a.pathname):/^\/in\/[^/]+\/?$/.test(a.pathname));
+   const link=platform==='xiaohongshu'?(links.find(a=>visible(a)&&new URL(a.href).searchParams.has('xsec_token'))||links.find(visible)||links[0]):links[0];
    if(link && text(row)) result.items.push({title:text(row).split('\n').filter(Boolean).slice(0,2).join(' · ').slice(0,200),content:text(row).slice(0,1800),url:link.href});
    if(result.items.length>=8)break;
   }
@@ -126,6 +137,21 @@ SNAPSHOT_JS = r"""({platform, mode}) => {
  }
  return result;
 }"""
+
+
+def session_path(platform):
+    settings(platform)
+    return store.DATA / "browser-sessions" / platform / "session.json"
+
+
+def valid_cookies(platform, cookies):
+    return [c for c in cookies if isinstance(c, dict)
+            and platform_for_url("https://" + str(c.get("domain", "")).lstrip(".")) == platform
+            and (c.get("expires", -1) == -1 or c.get("expires", 0) > time.time())]
+
+
+def has_auth(platform, cookies):
+    return any(c.get("name") == PLATFORMS[platform]["cookie"] and c.get("value") for c in valid_cookies(platform, cookies))
 
 
 class BrowserCollector:
@@ -186,6 +212,18 @@ class BrowserCollector:
                     return
             await route.continue_()
 
+        # Restore session cookies as well as the persistent browser profile.
+        # Never extend server-issued expiration dates or replace newer browser cookies.
+        saved = session_path(platform)
+        if saved.exists() and settings(platform)["status"] not in ("needs_login", "challenge"):
+            try:
+                cookies = valid_cookies(platform, json.loads(saved.read_text()))
+                existing = {(c["name"], c["domain"], c["path"]) for c in await context.cookies()}
+                missing = [c for c in cookies if (c["name"], c["domain"], c["path"]) not in existing]
+                if missing:
+                    await context.add_cookies(missing)
+            except (ValueError, TypeError, OSError):
+                saved.unlink(missing_ok=True)
         await context.route("**/*", constrain)
         context.set_default_timeout(8000)
         self.contexts[platform] = context
@@ -201,20 +239,37 @@ class BrowserCollector:
         return page
 
     async def snapshot(self, platform, mode="read"):
+        from playwright.async_api import Error as BrowserError
         page = await self.page(platform)
-        return await page.evaluate(SNAPSHOT_JS, {"platform": platform, "mode": mode})
+        try:
+            async with asyncio.timeout(10):
+                return await page.evaluate(SNAPSHOT_JS, {"platform": platform, "mode": mode})
+        except TimeoutError:
+            raise ValueError("页面内容读取超时，请检查独立浏览器是否已加载完成") from None
+        except BrowserError:
+            raise ValueError("浏览器页面已关闭或暂不可读，请打开平台窗口后重试") from None
+
+    async def remember(self, platform):
+        cookies = valid_cookies(platform, await self.contexts[platform].cookies())
+        path = session_path(platform)
+        if not has_auth(platform, cookies):
+            path.unlink(missing_ok=True)
+            return
+        fd, temp = tempfile.mkstemp(dir=path.parent, prefix="session-", suffix=".tmp")
+        with os.fdopen(fd, "w") as output:
+            json.dump(cookies, output)
+        os.replace(temp, path)  # mkstemp creates mode 0600
 
     async def login(self, platform):
         async with self.locks[platform]:
             page = await self.page(platform)
             try:
-                await page.goto(PLATFORMS[platform]["home"], wait_until="domcontentloaded", timeout=30000)
+                await page.goto("https://www.linkedin.com/feed/" if platform == "linkedin" else PLATFORMS[platform]["home"], wait_until="domcontentloaded", timeout=30000)
                 await page.bring_to_front()
             except Exception:
                 update(platform, status="connection_error", message="浏览器已打开，但平台页面加载失败；请检查网络后在窗口中重试")
                 return self.public(platform)
-            update(platform, status="awaiting_login", message="请在独立浏览器中完成登录，然后点击检查登录状态")
-            return self.public(platform)
+        return await self.check(platform)
 
     def public(self, platform):
         return next(item for item in statuses() if item["platform"] == platform)
@@ -222,23 +277,35 @@ class BrowserCollector:
     async def check(self, platform):
         async with self.locks[platform]:
             if platform not in self.contexts:
+                if settings(platform)["status"] == "restorable":
+                    await self.page(platform)
+                    cookies = await self.contexts[platform].cookies()
+                    if has_auth(platform, cookies):
+                        update(platform, status="restorable", message="已加载本机登录态，下次采集时验证有效性")
+                        return self.public(platform)
                 update(platform, status="disconnected", message="请先打开登录窗口；已有登录态会从本机加载")
                 return self.public(platform)
             page = await self.page(platform)
             snapshot = await self.snapshot(platform)
             blocked = blocker(snapshot)
             cookies = await self.contexts[platform].cookies()
-            has_session = any(cookie["name"] == PLATFORMS[platform]["cookie"] and cookie.get("value") and platform_for_url("https://" + cookie["domain"].lstrip(".")) == platform for cookie in cookies)
+            has_session = has_auth(platform, cookies)
             if blocked:
+                if blocked[0] == "needs_login":
+                    session_path(platform).unlink(missing_ok=True)
                 update(platform, status=blocked[0], message=blocked[1])
             elif has_session and platform_for_url(page.url) == platform:
+                await self.remember(platform)
                 update(platform, status="ready", message="检测到登录态；具体搜索和正文访问将在采集时验证")
             else:
+                session_path(platform).unlink(missing_ok=True)
                 update(platform, status="needs_login", message="尚未检测到登录态，请完成登录后再检查")
             return self.public(platform)
 
     async def disconnect(self, platform, forget=False):
         async with self.locks[platform]:
+            if platform in self.contexts and settings(platform)["status"] == "ready":
+                await self.remember(platform)
             context = self.contexts.pop(platform, None)
             self.pages.pop(platform, None)
             if context:
@@ -273,6 +340,12 @@ class BrowserCollector:
                     update(platform, status="needs_login" if response.status == 401 else "challenge", message=f"平台返回 HTTP {response.status}，自动采集已暂停；请手动检查后重新检测状态")
                     raise ValueError(settings(platform)["message"])
                 await page.wait_for_timeout(1800)
+                # Wait for client-rendered content without reloading or sending another request.
+                selector = (".note-item" if platform == "xiaohongshu" else ".reusable-search__result-container, .entity-result") if mode == "search" else ("#detail-desc, .note-content .desc" if platform == "xiaohongshu" else "main h1")
+                try:
+                    await page.locator(selector).first.wait_for(state="visible", timeout=8000)
+                except Exception:
+                    pass
                 if platform_for_url(page.url) != platform:
                     raise ValueError("页面跳转到平台外，已停止读取")
                 snap = await self.snapshot(platform, mode)
@@ -280,6 +353,7 @@ class BrowserCollector:
                 if blocked:
                     update(platform, status=blocked[0], message=blocked[1])
                     raise ValueError(blocked[1])
+                await self.remember(platform)
                 validate_target(platform, page.url, search=mode == "search")
                 if mode == "search":
                     if not snap["items"] and not snap.get("empty"):
@@ -322,6 +396,8 @@ class BrowserCollector:
 
     async def close(self):
         for platform in list(self.contexts):
+            if settings(platform)["status"] == "ready":
+                await self.remember(platform)
             context = self.contexts.pop(platform)
             await context.close()
         self.pages.clear()
@@ -351,5 +427,7 @@ async def search(platform, query):
 def recover():
     for platform in PLATFORMS:
         saved = store.get("social-" + platform)
-        if saved and saved["status"] not in ("challenge", "needs_login", "connection_error", "disconnected"):
-            update(platform, status="disconnected", message="服务重启，已保留登录态；请打开登录窗口并检查状态后继续")
+        if saved and saved["status"] in ("ready", "restorable"):
+            update(platform, status="restorable", message="已保留本机登录态，下次采集自动恢复；若平台要求验证会暂停")
+        elif saved and saved["status"] == "awaiting_login":
+            update(platform, status="disconnected", message="请打开窗口完成首次登录并检查状态")

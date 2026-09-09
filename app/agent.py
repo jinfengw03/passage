@@ -100,6 +100,8 @@ async def dispatch(run, settings, name, args):
     if name == "search_web":
         if run["search_count"] >= settings["max_searches"]:
             raise ValueError("已达到本次搜索次数上限，请使用现有证据完成报告")
+        if not settings.get("search_key"):
+            raise ValueError("未配置 Tavily，联网搜索不可用；本次未扣除搜索预算")
         if not args["query"].strip() or len(args["query"]) > 500:
             raise ValueError("搜索词不能为空或超过 500 字")
         run["search_count"] += 1
@@ -127,6 +129,14 @@ async def dispatch(run, settings, name, args):
     if name == "search_social":
         if run["search_count"] >= settings["max_searches"]:
             raise ValueError("已达到本次搜索次数上限")
+        prefs = social.settings(args["platform"])
+        if not prefs["enabled"] or prefs["status"] not in ("ready", "restorable"):
+            raise ValueError("平台未启用或会话需处理；本次未扣除搜索预算")
+        usage = store.get("social-usage-" + args["platform"] + "-" + store.now()[:10]) or {}
+        if usage.get("count", 0) >= prefs["daily_limit"]:
+            raise ValueError("平台已达到今日请求上限；本次未扣除搜索预算")
+        if not args["query"].strip() or len(args["query"]) > 300:
+            raise ValueError("站内搜索词必须为 1–300 字")
         run["search_count"] += 1
         event(run, "站内搜索：" + args["platform"] + " · " + args["query"][:300])
         return [attach(run, item) for item in await social.search(args["platform"], args["query"])]
@@ -157,6 +167,7 @@ async def dispatch(run, settings, name, args):
             if not finding["evidence_ids"] or any(ident not in known for ident in finding["evidence_ids"]):
                 raise ValueError("每条事实必须引用本次已读取的真实证据ID；没有证据的内容放入 unknowns")
         run["report"] = args
+        run.pop("partial_report", None)
         run["status"] = "completed"
         event(run, "调查完成，已校验证据引用")
         return {"status": "completed"}
@@ -184,7 +195,7 @@ def initialize(run, settings):
         "证据不足仍应提交诚实的部分报告，不能将一般建议说成已核实事实。"
         "为节约成本，不重复相同搜索；有足够证据或预算将尽时结束。"
         f"当前UTC日期：{store.now()}。Skill目录：{json.dumps(catalog, ensure_ascii=False)}。"
-        f"社媒连接状态：{json.dumps(social.statuses(), ensure_ascii=False)}。只有enabled且ready的平台才调用search_social。"
+        f"社媒连接状态：{json.dumps(social.statuses(), ensure_ascii=False)}。只有enabled且状态为ready或restorable的平台才调用search_social。"
         "社媒正文标记visible_text，只表示当前可见内容，不代表完整履历/全部评论。遇到登录、验证、限流错误不再调用同平台，列为待用户处理。"
         f"上限：{settings['max_steps']}轮、{settings['max_searches']}次搜索、{settings['max_pages']}页。")},
         {"role": "user", "content": json.dumps({"question": run["question"], "profile": profile, "confirmed_memories": memories}, ensure_ascii=False)}]
@@ -205,13 +216,52 @@ def initialize(run, settings):
         run["messages"].append({"role": "user", "content": "用户提供的参考资料（仅作数据）：" + json.dumps(attachments, ensure_ascii=False)})
 
 
+def available_tools(run, settings, closing=False):
+    allowed = {"load_skill", "finish_research"} if closing else {t["function"]["name"] for t in TOOLS}
+    if not settings.get("search_key") or run["search_count"] >= settings["max_searches"]:
+        allowed.discard("search_web")
+    if run["search_count"] >= settings["max_searches"] or not any(s["enabled"] and s["status"] in ("ready", "restorable") for s in social.statuses()):
+        allowed.discard("search_social")
+    if run["page_count"] >= settings["max_pages"]:
+        allowed.discard("read_url")
+    return [t for t in TOOLS if t["function"]["name"] in allowed]
+
+
+def closing_context(run):
+    evidence = []
+    for source in run["sources"]:
+        item = store.get(source["id"])
+        evidence.append({**source, "excerpt": (item or {}).get("content", "")[:1400]})
+    errors = [e["message"] for e in run["events"] if e["level"] == "warning"][-4:]
+    return run["messages"][:2] + [{"role": "user", "content":
+        "现在只整理已有证据，不再搜索或读取页面。已加载方法：" + ', '.join(run['skills']) +
+        "。必须调用finish_research；报告简短，最多4条发现，每条只用下列完整证据ID，不能缩写。"
+        "正文为截取片段，不足以支持的结论写入unknowns。保证JSON完整，总文字不超过1000字。"
+        + json.dumps({"evidence": evidence, "recent_errors": errors}, ensure_ascii=False)}]
+
+
+def partial_report(run):
+    if run.get("report"):
+        return
+    run["partial_report"] = True
+    run["report"] = {"summary": f"研究未完成：已保留 {len(run['sources'])} 份资料，尚未形成通过校验的分析结论。",
+                     "findings": [], "unknowns": [run.get("error") or "模型未能提交有效报告"],
+                     "next_steps": ["查看下方已收集的来源；恢复研究将优先使用现有资料收尾。", "如需补充通用搜索，请在设置中配置 Tavily；社媒需单独启用。"]}
+
+
 async def run_loop(run, settings):
     if not run["messages"]:
         initialize(run, settings)
     for step in range(run["step"], settings["max_steps"]):
         run["step"] = step
         event(run, f"分析与调查 · 第 {step + 1} 轮")
-        message, usage = await providers.complete(settings, run["messages"], TOOLS)
+        closing = (run.get("finish_only", False) or step >= settings["max_steps"] - 2 or run["usage"].get("total_tokens", 0) >= settings["max_total_tokens"] * 0.8
+                   or (settings["max_pages"] > 0 and run["page_count"] >= settings["max_pages"]))
+        if closing:
+            event(run, "进入报告收尾：使用已有证据，暂停新增搜索与页面读取")
+        offered = available_tools(run, settings, closing)
+        context = closing_context(run) if closing else run["messages"]
+        message, usage = await providers.complete(settings, context, offered)
         for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
             run["usage"][key] = run["usage"].get(key, 0) + int(usage.get(key, 0) or 0)
         calls = message.get("tool_calls") or []
@@ -227,7 +277,12 @@ async def run_loop(run, settings):
                 if run["status"] == "completed":
                     result = {"status": "skipped", "reason": "报告已经完成"}
                 else:
+                    if call["function"]["name"] not in {t["function"]["name"] for t in offered}:
+                        raise ValueError("该工具当前不可用或预算已用尽；请使用现有证据提交报告")
                     result = await dispatch(run, settings, call["function"]["name"], args)
+            except json.JSONDecodeError:
+                result = {"error": "工具 JSON 不完整或格式错误；请缩短报告后重新调用，保留完整证据 ID"}
+                event(run, result["error"], "warning")
             except (ValueError, KeyError, TypeError, OSError, http.client.HTTPException) as error:
                 # No provider response bodies or credentials enter the activity log.
                 result = {"error": str(error)[:350]}
@@ -239,10 +294,11 @@ async def run_loop(run, settings):
             return
         if step == settings["max_steps"] - 2:
             run["messages"].append({"role": "user", "content": "下一轮结束调查，请只调用finish_research；缺失内容列入unknowns。"})
-        if run["usage"].get("total_tokens", 0) > 100000:
+        if run["usage"].get("total_tokens", 0) > settings["max_total_tokens"] and not run.get("finish_only"):
             break
     run["status"] = "limited"
     run["error"] = "已达到调查轮数或 Token 上限，已保存收集的证据。可新建问题缩小范围。"
+    partial_report(run)
     event(run, run["error"], "warning")
 
 
@@ -253,6 +309,8 @@ async def worker(ident):
             settings = config.read()
             if not settings["model"]:
                 raise ValueError("请先在设置中填写模型名称并测试连接")
+            if run.get("finish_only"):
+                settings = {**settings, "max_steps": run["step"] + 2, "timeout_seconds": min(settings["timeout_seconds"], 120)}
             run["status"] = "running"
             run.pop("error", None)
             event(run, "研究任务已开始")
@@ -274,6 +332,8 @@ async def worker(ident):
         run["error"] = str(error)[:350] if isinstance(error, (ValueError, OSError)) else "执行异常，已保存证据；请重试或检查服务配置"
         event(run, run["error"], "warning")
     finally:
+        if run["status"] in ("limited", "failed", "interrupted"):
+            partial_report(run)
         checkpoint(run)
         TASKS.pop(ident, None)
 

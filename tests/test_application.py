@@ -172,7 +172,7 @@ def test_fabricated_citations_rejected_and_budget_enforced():
     report = {"summary": "测试", "findings": [{"claim": "假的事实", "evidence_ids": ["invented"], "caveat": ""}], "unknowns": [], "next_steps": []}
     with pytest.raises(ValueError, match="真实证据"):
         asyncio.run(agent.dispatch(run, config.DEFAULTS, "finish_research", report))
-    run["search_count"] = 4
+    run["search_count"] = config.DEFAULTS["max_searches"]
     with pytest.raises(ValueError, match="上限"):
         asyncio.run(agent.dispatch(run, config.DEFAULTS, "search_web", {"query": "test"}))
 

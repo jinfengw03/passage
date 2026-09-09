@@ -91,4 +91,24 @@ def test_restart_does_not_silently_clear_challenge():
     social.update("xiaohongshu", enabled=True, status="ready")
     social.recover()
     assert social.settings("linkedin")["status"] == "challenge"
-    assert social.settings("xiaohongshu")["status"] == "disconnected"
+    assert social.settings("xiaohongshu")["status"] == "restorable"
+
+
+def test_cookie_expiry_and_platform_scope():
+    cookies = [
+        {"name": "li_at", "value": "fixture", "domain": ".linkedin.com", "expires": -1},
+        {"name": "expired", "domain": ".linkedin.com", "expires": 1},
+        {"name": "foreign", "domain": ".example.org", "expires": -1},
+    ]
+    assert social.valid_cookies("linkedin", cookies) == cookies[:1]
+    assert social.has_auth("linkedin", cookies)
+    assert not social.has_auth("xiaohongshu", cookies)
+
+
+def test_restart_retains_paused_and_disabled_states():
+    social.update("linkedin", enabled=False, status="disconnected")
+    social.update("xiaohongshu", enabled=True, status="needs_login")
+    social.recover()
+    assert not social.settings("linkedin")["enabled"]
+    assert social.settings("linkedin")["status"] == "disconnected"
+    assert social.settings("xiaohongshu")["status"] == "needs_login"

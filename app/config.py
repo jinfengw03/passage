@@ -5,9 +5,9 @@ from . import store
 
 DEFAULTS = {
     "base_url": "https://api.deepseek.com", "model": "", "api_key": "",
-    "search_provider": "tavily", "search_key": "", "max_steps": 12,
-    "max_searches": 4, "max_pages": 8, "max_output_tokens": 2400,
-    "timeout_seconds": 240, "profile_to_model": True,
+    "search_provider": "tavily", "search_key": "", "max_steps": 24,
+    "max_searches": 10, "max_pages": 20, "max_output_tokens": 6000,
+    "max_total_tokens": 300000, "timeout_seconds": 600, "profile_to_model": True,
 }
 SECRET_FIELDS = ("api_key", "search_key")
 

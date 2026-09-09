@@ -151,7 +151,7 @@ python -m tests.social_browser_smoke
 
 浏览器测试默认使用 `/usr/bin/microsoft-edge`；其他 Chromium 系浏览器可用 `BROWSER_PATH` 指定。测试在临时数据库运行，界面测试使用 `8766` 端口，截图写入 `test-results/`。可安装 `requirements-lock.txt` 复现当前依赖快照。
 
-当前验证记录：**45 项后端测试通过**，另有界面与社媒适配器浏览器测试。模型使用测试夹具，这不代表实际模型回答质量或真实账号采集已验证。见[完整验证记录](docs/validation.md)。
+当前验证记录：**52 项后端测试通过**，另有界面与社媒适配器浏览器测试。模型使用测试夹具，这不代表实际模型回答质量或真实账号采集已验证。见[完整验证记录](docs/validation.md)。
 
 ```text
 app/          API、Agent、模型接入、采集、简历解析与存储

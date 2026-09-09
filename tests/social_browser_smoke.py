@@ -19,7 +19,7 @@ async def main():
             for platform in ("xiaohongshu", "linkedin"):
                 context = await collector.context(platform)
                 if platform == "xiaohongshu":
-                    html = '<section class="note-item"><a href="https://www.xiaohongshu.com/explore/abc123?xsec_token=fixture">测试申请经验</a><p>申请者的背景和项目体验，仅为测试资料。</p></section>'
+                    html = '<section class="note-item"><a style="display:none" href="https://www.xiaohongshu.com/explore/abc123"></a><a href="https://www.xiaohongshu.com/explore/abc123?xsec_token=fixture">测试申请经验</a><p>申请者的背景和项目体验，仅为测试资料。</p></section>'
                     detail = '<main class="note-container"><div id="detail-title">测试笔记</div><div id="detail-desc">' + '测试申请经验，完成先修课程并核实申请要求。' * 8 + '</div></main>'
                     url = "https://www.xiaohongshu.com/search_result?keyword=test"
                     note = "https://www.xiaohongshu.com/explore/abc123?xsec_token=fixture"
@@ -42,10 +42,25 @@ async def main():
                 social.update(platform, enabled=True, interval_seconds=0, daily_limit=10)
                 results = await collector.collect(platform, url, "search")
                 assert len(results) == 1 and results[0]["access"] == "snippet"
+                if platform == "xiaohongshu":
+                    assert "xsec_token=fixture" in results[0]["url"]
                 assert "fixture-only-not-real" not in json.dumps(results)
                 result = await collector.collect(platform, note, "read")
                 assert result["access"] == "visible_text"
                 assert "MUST NOT BE STORED" not in result["content"]
+                saved = social.session_path(platform)
+                assert saved.exists() and saved.stat().st_mode & 0o777 == 0o600
+                # Simulate session-only cookies disappearing when the browser exits.
+                await context.clear_cookies()
+                await context.close()
+                social.recover()
+                assert social.settings(platform)["status"] == "restorable"
+                context = await collector.context(platform)
+                assert social.has_auth(platform, await context.cookies())
+                await context.route("**/*", respond)
+                result = await collector.collect(platform, note, "read")
+                assert result["access"] == "visible_text"
+                assert social.settings(platform)["status"] == "ready"
                 await context.unroute("**/*", respond)
                 async def challenge(route):
                     await route.fulfill(status=429, body="Too many requests")

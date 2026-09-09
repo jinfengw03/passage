@@ -88,11 +88,12 @@ class Settings(Input):
     api_key: str | None = Field(default=None, max_length=1000)
     search_key: str | None = Field(default=None, max_length=1000)
     search_provider: str = "tavily"
-    max_steps: int = Field(default=12, ge=3, le=20)
-    max_searches: int = Field(default=4, ge=0, le=10)
-    max_pages: int = Field(default=8, ge=0, le=20)
-    max_output_tokens: int = Field(default=2400, ge=500, le=8000)
-    timeout_seconds: int = Field(default=240, ge=30, le=600)
+    max_steps: int = Field(default=24, ge=3, le=40)
+    max_searches: int = Field(default=10, ge=0, le=30)
+    max_pages: int = Field(default=20, ge=0, le=50)
+    max_output_tokens: int = Field(default=6000, ge=500, le=8000)
+    max_total_tokens: int = Field(default=300000, ge=10000, le=1000000)
+    timeout_seconds: int = Field(default=600, ge=30, le=1800)
     profile_to_model: bool = True
 
     @field_validator("base_url")
@@ -204,6 +205,17 @@ async def check_social(platform: Platform):
     return await social.collector.check(platform)
 
 
+@app.post("/api/social/{platform}/inspect")
+async def inspect_social(platform: Platform):
+    # No navigation, cookies, raw page state or user details are exposed.
+    async with social.collector.locks[platform]:
+        if platform not in social.collector.contexts:
+            raise ValueError("请先打开平台窗口")
+        snapshot = await social.collector.snapshot(platform, "search")
+        return {"inspection": snapshot.get("inspection", {}), "visible_results": len(snapshot["items"]),
+                "blocked": bool(social.blocker(snapshot))}
+
+
 @app.post("/api/social/{platform}/search")
 async def search_social(platform: Platform, body: SocialSearch):
     results = await social.search(platform, body.query)
@@ -313,8 +325,11 @@ async def cancel(ident: str):
 @app.post("/api/runs/{ident}/resume")
 async def resume(ident: str):
     run = require(ident, "run")
-    if run["status"] not in ("interrupted", "failed", "cancelled"):
+    if run["status"] not in ("interrupted", "failed", "cancelled", "limited"):
         raise HTTPException(409, "此状态的任务不能恢复")
+    if run["status"] == "limited":
+        run["finish_only"] = True
+        agent.checkpoint(run)
     agent.start(ident)
     return {"ok": True}
 
