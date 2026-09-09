@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
+  <title id="title">渡 · Passage</title>
+  <desc id="desc">米白底色、深绿文字与流向彼岸的曲线。把信息变成你的下一步。</desc>
+  <rect width="1200" height="360" rx="20" fill="#f6f5f0"/>
+  <g fill="none" stroke="#cdd7ca" stroke-width="1.5">
+    <path d="M760 -20C610 80 1100 100 940 210S810 330 1040 395"/>
+    <path d="M800 -20C650 80 1140 100 980 210S850 330 1080 395"/>
+    <path d="M840 -20C690 80 1180 100 1020 210S890 330 1120 395"/>
+    <path d="M880 -20C730 80 1220 100 1060 210S930 330 1160 395"/>
+    <path d="M920 -20C770 80 1260 100 1100 210S970 330 1200 395"/>
+  </g>
+  <circle cx="998" cy="187" r="7" fill="#355c50"/>
+  <path d="M998 171V147" stroke="#355c50" stroke-width="1.5"/>
+  <text x="74" y="76" fill="#788a72" font-family="sans-serif" font-size="12" letter-spacing="4">YOUR NEXT CHAPTER</text>
+  <rect x="74" y="117" width="80" height="80" rx="23" fill="#355c50"/>
+  <text x="114" y="175" fill="#f6f5f0" font-family="serif" font-size="48" text-anchor="middle">渡</text>
+  <text x="179" y="177" fill="#23473e" font-family="Georgia,serif" font-size="67">Passage</text>
+  <text x="76" y="249" fill="#355c50" font-family="serif" font-size="25" letter-spacing="2">把信息变成你的下一步。</text>
+  <text x="77" y="290" fill="#7a8575" font-family="sans-serif" font-size="13" letter-spacing="2">PERSONAL APPLICATION RESEARCH WORKSPACE</text>
+</svg>

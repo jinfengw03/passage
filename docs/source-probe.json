@@ -1,0 +1,59 @@
+{
+  "note": "一次小样本探测，不代表稳定成功率。受限平台在网络请求前停止；未抓取个人名单。",
+  "results": [
+    {
+      "name": "CMU 毕业去向",
+      "url": "https://www.cmu.edu/career/outcomes/index.html",
+      "tested_at": "2026-09-09T02:34:27.050287+00:00",
+      "status": "readable",
+      "title": "Outcomes - \n                Career & Professional Development Center -     Student Affairs - Carnegie Mellon University",
+      "characters": 2476,
+      "access": "full_text",
+      "seconds": 14.57
+    },
+    {
+      "name": "UW 毕业手册入口",
+      "url": "https://www.washington.edu/ceremony/commencement-program/",
+      "tested_at": "2026-09-09T02:34:27.050886+00:00",
+      "status": "readable",
+      "title": "Commencement Program – Office of Ceremonies",
+      "characters": 69,
+      "access": "full_text",
+      "seconds": 8.77
+    },
+    {
+      "name": "一亩三分地公开首页",
+      "url": "https://www.1point3acres.com/",
+      "tested_at": "2026-09-09T02:34:27.051549+00:00",
+      "status": "not_collected",
+      "reason": "[Errno 104] Connection reset by peer",
+      "seconds": 0.3
+    },
+    {
+      "name": "小红书",
+      "url": "https://www.xiaohongshu.com/",
+      "tested_at": "2026-09-09T02:34:27.351794+00:00",
+      "status": "not_collected",
+      "reason": "小红书尚未完成授权接入，请导入你有权使用的笔记内容。",
+      "seconds": 0.0
+    },
+    {
+      "name": "LinkedIn",
+      "url": "https://www.linkedin.com/",
+      "tested_at": "2026-09-09T02:34:27.351916+00:00",
+      "status": "not_collected",
+      "reason": "LinkedIn 目前仅支持人工核对，未启用自动抓取。",
+      "seconds": 0.0
+    },
+    {
+      "name": "英国政府学生签证",
+      "url": "https://www.gov.uk/student-visa",
+      "tested_at": "2026-09-09T02:34:27.351963+00:00",
+      "status": "readable",
+      "title": "Student visa : Overview - GOV.UK",
+      "characters": 6046,
+      "access": "full_text",
+      "seconds": 4.29
+    }
+  ]
+}
